@@ -48,20 +48,64 @@ type Coordinator struct {
 }
 
 // Your code here -- RPC handlers for the worker to call.
+func (c *Coordinator) ReportTask(args *ReportTaskArgs, reply *ReportTaskReply) error {
+	fmt.Printf("worker: %d done task: %d \n",args.WorkerId, args.TaskId)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	//find task and marked it as completed
+	//does c.phase need to cjeck?
+	if args.TaskType == MapTask {
+		for i := range c.mapTasks {
+			if (c.mapTasks[i].taskId == args.TaskId) && (c.mapTasks[i].workerId == args.WorkerId) {
+				//what if task reassigned to other worker. this slow worker come after that
+					c.mapTasks[i].status = Completed
+					return nil
+			}
+		}
+	} else if args.TaskType == ReduceTask {
+		for i := range c.reduceTasks {
+			if (c.reduceTasks[i].taskId == args.TaskId) && (c.reduceTasks[i].workerId == args.WorkerId) {
+				c.reduceTasks[i].status = Completed
+				return nil
+			}
+		}
+	}
+
+	return nil
+
+}
+
+
 func (c *Coordinator) AskTask(args *TaskArgs, reply *TaskReply) error {
-	fmt.Println("worker asking task")
+	fmt.Printf("worker: %d asking task\n", args.WorkerId)
+	c.mu.Lock()
+	defer c.mu.Unlock() // i missed this part
+
+	if c.phase == MapTask && allDone(c.mapTasks) {
+		c.phase = ReduceTask
+	}
+
+	if c.phase == ReduceTask && allDone(c.reduceTasks) {
+		c.phase = ExitTask
+	}
 
 	if c.phase == MapTask {
+		resetStaleTasks(c.mapTasks)
+
 		for i := range c.mapTasks {
 			if c.mapTasks[i].status == Idle {
 				fmt.Printf("worker assign for task %d: %s\n", args.WorkerId, c.mapTasks[i].fileName)
 				c.mapTasks[i].status = InProgress
 				c.mapTasks[i].startTime = time.Now()
 				c.mapTasks[i].workerId = args.WorkerId
+			
 
 				reply.FileName = c.mapTasks[i].fileName
 				reply.TaskId = i
 				reply.TaskType = MapTask
+				reply.NReduce = c.nReduce
 
 				return nil
 			}
@@ -71,6 +115,7 @@ func (c *Coordinator) AskTask(args *TaskArgs, reply *TaskReply) error {
 		reply.TaskType = WaitTask
 
 	} else if c.phase == ReduceTask {
+		resetStaleTasks(c.reduceTasks)
 		for i := range c.reduceTasks {
 			if c.reduceTasks[i].status == Idle {
 				fmt.Printf("worker assign reduce task id : %d to workerid: %d\n", c.reduceTasks[i].taskId, args.WorkerId)
@@ -80,14 +125,36 @@ func (c *Coordinator) AskTask(args *TaskArgs, reply *TaskReply) error {
 
 				reply.TaskType = ReduceTask
 				reply.TaskId = i
-
+				reply.NMap = c.nMap
 				return nil
 			}
 		}
+		//why we exit if all reduce task inprogress
+		reply.TaskType = ExitTask
+	} else {
 		reply.TaskType = ExitTask
 	}
 
 	return nil
+}
+
+func resetStaleTasks(tasks []Task) {
+	for i := range tasks {
+		if tasks[i].status == InProgress && time.Since(tasks[i].startTime) > 10 * time.Second {
+			tasks[i].status = Idle
+		}
+	}
+}
+
+func allDone(tasks []Task) bool {
+	// i stuck here why i cant do this
+	// if you use for i := range then it will give index not task careful
+	for _, t := range tasks{
+		if t.status != Completed{
+			return false
+		}
+	}
+	return true
 }
 
 // an example RPC handler.
@@ -115,11 +182,10 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := false
-
-	// Your code here.
-
-	return ret
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// reuse same source of truth
+	return c.phase == ExitTask
 }
 
 // create a Coordinator.

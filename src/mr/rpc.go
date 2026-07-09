@@ -32,6 +32,18 @@ type TaskReply struct {
 	TaskType TaskType
 	TaskId   int
 	FileName string
+	NReduce int
+	NMap int
+}
+
+type ReportTaskArgs struct{
+	TaskType TaskType
+	TaskId int
+	WorkerId int
+}
+
+type ReportTaskReply struct{
+
 }
 
 // Add your RPC definitions here.
